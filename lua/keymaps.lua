@@ -51,4 +51,10 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   end,
 })
 
+-- Break line keymap
+vim.keymap.set('n', '<leader>j', 'i<CR><Esc>', {
+  silent = true,
+  desc = 'Break line at cursor',
+})
+
 -- vim: ts=2 sts=2 sw=2 et
