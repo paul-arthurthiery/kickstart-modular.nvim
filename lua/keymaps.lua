@@ -22,14 +22,8 @@ vim.keymap.set('t', '<Esc><Esc>', '<C-\\><C-n>', { desc = 'Exit terminal mode' }
 -- vim.keymap.set('n', '<up>', '<cmd>echo "Use k to move!!"<CR>')
 -- vim.keymap.set('n', '<down>', '<cmd>echo "Use j to move!!"<CR>')
 
--- Keybinds to make split navigation easier.
---  Use CTRL+<hjkl> to switch between windows
---
---  See `:help wincmd` for a list of all window commands
-vim.keymap.set('n', '<C-h>', '<C-w><C-h>', { desc = 'Move focus to the left window' })
-vim.keymap.set('n', '<C-l>', '<C-w><C-l>', { desc = 'Move focus to the right window' })
-vim.keymap.set('n', '<C-j>', '<C-w><C-j>', { desc = 'Move focus to the lower window' })
-vim.keymap.set('n', '<C-k>', '<C-w><C-k>', { desc = 'Move focus to the upper window' })
+-- Split/pane navigation is handled by vim-tmux-navigator plugin
+-- which seamlessly navigates both nvim splits and tmux panes with <C-h/j/k/l>
 
 -- NOTE: Some terminals have colliding keymaps or are not able to send distinct keycodes
 -- vim.keymap.set("n", "<C-S-h>", "<C-w>H", { desc = "Move window to the left" })
@@ -51,10 +45,26 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   end,
 })
 
+-- Restart nvim (save session, quit — auto-session restores on reopen)
+-- Restart nvim in-place via tmux (save session, quit, relaunch)
+vim.keymap.set('n', '<leader>qr', function()
+  vim.cmd('AutoSession save')
+  local pane = vim.env.TMUX_PANE
+  if pane then
+    local cwd = vim.fn.getcwd()
+    vim.fn.system(string.format("tmux respawn-pane -k -t %s 'cd %s && exec $SHELL -c nvim'", pane, vim.fn.shellescape(cwd)))
+  else
+    vim.cmd('qa')
+  end
+end, { desc = 'Restart nvim (save, quit, relaunch)' })
+
 -- Break line keymap
 vim.keymap.set('n', '<leader>j', 'a<CR><Esc>', {
   silent = true,
   desc = 'Break line at cursor',
 })
+
+-- Close all buffers except current and nvim-tree
+vim.keymap.set('n', '<leader>bo', '<cmd>BufferLineCloseOthers<cr>', { desc = 'Close all other buffers' })
 
 -- vim: ts=2 sts=2 sw=2 et
