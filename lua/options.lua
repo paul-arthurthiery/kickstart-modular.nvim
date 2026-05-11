@@ -3,6 +3,11 @@
 -- NOTE: You can change these options as you wish!
 --  For more options, you can see `:help option-list`
 
+-- Reload buffers when files change on disk (e.g. after switching branches)
+vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter' }, {
+  command = 'checktime',
+})
+
 -- Make line numbers default
 vim.o.number = true
 -- You can also add relative line numbers, to help with jumping.
@@ -63,12 +68,47 @@ vim.o.inccommand = 'split'
 -- Show which line your cursor is on
 vim.o.cursorline = true
 
+-- Global statusline (always visible, even when nvim-tree is focused)
+vim.o.laststatus = 3
+
 -- Minimal number of screen lines to keep above and below the cursor.
 vim.o.scrolloff = 10
+
+-- Folding (nvim-ufo)
+vim.o.foldcolumn = '0' -- disable default foldcolumn, we use statuscolumn instead
+vim.o.foldlevel = 99
+vim.o.foldlevelstart = 99
+vim.o.foldenable = true
+
+-- Custom statuscolumn with fold indicators
+vim.o.statuscolumn = '%s%l %{foldlevel(v:lnum) > 0 ? (foldlevel(v:lnum) > foldlevel(v:lnum - 1) ? (foldclosed(v:lnum) == -1 ? "▽" : "▶") : " ") : " "} '
 
 -- if performing an operation that would fail due to unsaved changes in the buffer (like `:q`),
 -- instead raise a dialog asking if you wish to save the current file(s)
 -- See `:help 'confirm'`
 vim.o.confirm = true
+
+-- Session options (recommended by auto-session)
+vim.o.sessionoptions = 'blank,buffers,curdir,folds,help,tabpages,winsize,winpos,localoptions'
+
+-- Set cwd to git root when opening a file
+vim.api.nvim_create_autocmd('BufEnter', {
+  callback = function()
+    local root = vim.fs.root(0, '.git')
+    if root then
+      vim.fn.chdir(root)
+    end
+  end,
+})
+
+-- Workaround for vscode-neovim output panel auto-opening (github.com/vscode-neovim/vscode-neovim/issues/2507)
+if vim.g.vscode then
+  vim.opt.shortmess = 'aAcCFIlmnoOqrstTWx'
+  vim.o.report = 9999
+  vim.o.cmdheight = 0
+  vim.o.showcmd = false
+  vim.o.showmode = false
+  vim.o.ruler = false
+end
 
 -- vim: ts=2 sts=2 sw=2 et
