@@ -16,14 +16,22 @@ return {
           end
         end,
       },
-      -- After restoring a session, close any leftover directory buffers
-      -- that nvim-tree's hijack_directories may have created
+      -- After restoring a session, clean up directory buffers and
+      -- reopen nvim-tree if it was open before restart
       post_restore_cmds = {
         function()
           for _, buf in ipairs(vim.api.nvim_list_bufs()) do
             local name = vim.api.nvim_buf_get_name(buf)
             if name ~= '' and vim.fn.isdirectory(name) == 1 then
               vim.api.nvim_buf_delete(buf, { force = true })
+            end
+          end
+          local flag = vim.fn.stdpath('state') .. '/nvim_tree_was_open'
+          if vim.fn.filereadable(flag) == 1 then
+            vim.fn.delete(flag)
+            local ok, api = pcall(require, 'nvim-tree.api')
+            if ok then
+              api.tree.open()
             end
           end
         end,

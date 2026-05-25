@@ -45,10 +45,20 @@ vim.api.nvim_create_autocmd('TextYankPost', {
   end,
 })
 
--- Restart nvim (save session, quit — auto-session restores on reopen)
 -- Restart nvim in-place via tmux (save session, quit, relaunch)
 vim.keymap.set('n', '<leader>qr', function()
-  vim.cmd('AutoSession save')
+  -- Remember nvim-tree state before save closes it
+  local tree_ok, tree_view = pcall(require, 'nvim-tree.view')
+  local tree_was_open = tree_ok and tree_view.is_visible()
+  local flag = vim.fn.stdpath('state') .. '/nvim_tree_was_open'
+  if tree_was_open then
+    vim.fn.writefile({ '1' }, flag)
+  else
+    vim.fn.delete(flag)
+  end
+
+  vim.cmd('silent! AutoSession save')
+
   local pane = vim.env.TMUX_PANE
   if pane then
     local cwd = vim.fn.getcwd()
