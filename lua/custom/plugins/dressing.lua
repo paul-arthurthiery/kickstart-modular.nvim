@@ -6,7 +6,7 @@ return {
       enabled = true,
     },
     select = {
-      enabled = false, -- fzf-lua handles vim.ui.select
+      enabled = false, -- snacks.picker handles vim.ui.select
     },
   },
 }

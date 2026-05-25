@@ -1,62 +1,38 @@
+-- Picker configuration using snacks.nvim picker (replaces fzf-lua)
+-- Features: frecency scoring, fast close, built-in preview
 return {
   {
-    'ibhagwan/fzf-lua',
-    dependencies = {
-      { 'nvim-tree/nvim-web-devicons', enabled = vim.g.have_nerd_font },
+    'folke/snacks.nvim',
+    opts = {
+      picker = {
+        matcher = {
+          frecency = true,
+        },
+        win = {
+          input = {
+            keys = {
+              ['<Esc>'] = { 'close', mode = { 'n', 'i' } },
+            },
+          },
+        },
+      },
     },
-    config = function()
-      local fzf = require 'fzf-lua'
-
-      fzf.setup {
-        'default-title',
-        fzf_opts = {
-          ['--layout'] = 'reverse',
-        },
-        files = {
-          fzf_opts = {
-            ['--scheme'] = 'path',
-          },
-        },
-        grep = {
-          formatter = 'path.filename_first',
-          -- Don't scroll to matched content — keeps filename visible.
-          -- Preview pane shows the full match in context.
-          fzf_opts = {
-            ['--no-hscroll'] = '',
-          },
-        },
-      }
-
-      -- Register as vim.ui.select handler (replaces telescope-ui-select)
-      fzf.register_ui_select()
-
-      vim.keymap.set('n', '<leader>sh', fzf.help_tags, { desc = '[S]earch [H]elp' })
-      vim.keymap.set('n', '<leader>sk', fzf.keymaps, { desc = '[S]earch [K]eymaps' })
-      vim.keymap.set('n', '<leader>sf', fzf.files, { desc = '[S]earch [F]iles' })
-      vim.keymap.set('n', '<leader>ss', fzf.builtin, { desc = '[S]earch [S]elect fzf-lua' })
-      vim.keymap.set('n', '<leader>sw', fzf.grep_cword, { desc = '[S]earch current [W]ord' })
-      vim.keymap.set('n', '<leader>sg', function()
-        fzf.grep { search = '', no_esc = true }
-      end, { desc = '[S]earch by [G]rep' })
-      vim.keymap.set('n', '<leader>sd', fzf.diagnostics_workspace, { desc = '[S]earch [D]iagnostics' })
-      vim.keymap.set('n', '<leader>sr', fzf.resume, { desc = '[S]earch [R]esume' })
-      vim.keymap.set('n', '<leader>s.', fzf.oldfiles, { desc = '[S]earch Recent Files ("." for repeat)' })
-      vim.keymap.set('n', '<leader><leader>', fzf.buffers, { desc = '[ ] Find existing buffers' })
-
-      vim.keymap.set('n', '<leader>/', fzf.lgrep_curbuf, { desc = '[/] Fuzzily search in current buffer' })
-
-      vim.keymap.set('n', '<leader>s/', function()
-        local bufs = vim.tbl_filter(function(b)
-          return vim.api.nvim_buf_is_loaded(b) and vim.api.nvim_buf_get_name(b) ~= ''
-        end, vim.api.nvim_list_bufs())
-        local paths = vim.tbl_map(vim.api.nvim_buf_get_name, bufs)
-        fzf.live_grep { search_paths = paths, prompt = 'Live Grep in Open Files> ' }
-      end, { desc = '[S]earch [/] in Open Files' })
-
-      vim.keymap.set('n', '<leader>sn', function()
-        fzf.files { cwd = vim.fn.stdpath 'config' }
-      end, { desc = '[S]earch [N]eovim files' })
-    end,
+    keys = {
+      { '<leader>sh', function() Snacks.picker.help() end, desc = '[S]earch [H]elp' },
+      { '<leader>sk', function() Snacks.picker.keymaps() end, desc = '[S]earch [K]eymaps' },
+      { '<leader>sf', function() Snacks.picker.smart() end, desc = '[S]earch [F]iles (smart/frecency)' },
+      { '<leader>ss', function() Snacks.picker.pickers() end, desc = '[S]earch [S]elect picker' },
+      { '<leader>sw', function() Snacks.picker.grep_word() end, desc = '[S]earch current [W]ord', mode = { 'n', 'x' } },
+      { '<leader>sg', function() Snacks.picker.grep({ args = { '--fixed-strings' } }) end, desc = '[S]earch by [G]rep (literal)' },
+      { '<leader>sG', function() Snacks.picker.grep() end, desc = '[S]earch by [G]rep (regex)' },
+      { '<leader>sd', function() Snacks.picker.diagnostics() end, desc = '[S]earch [D]iagnostics' },
+      { '<leader>sr', function() Snacks.picker.resume() end, desc = '[S]earch [R]esume' },
+      { '<leader>s.', function() Snacks.picker.recent() end, desc = '[S]earch Recent Files' },
+      { '<leader><leader>', function() Snacks.picker.buffers() end, desc = '[ ] Find existing buffers' },
+      { '<leader>/', function() Snacks.picker.lines() end, desc = '[/] Fuzzily search in current buffer' },
+      { '<leader>s/', function() Snacks.picker.grep_buffers() end, desc = '[S]earch [/] in Open Files' },
+      { '<leader>sn', function() Snacks.picker.files { cwd = vim.fn.stdpath 'config' } end, desc = '[S]earch [N]eovim files' },
+    },
   },
 }
 -- vim: ts=2 sts=2 sw=2 et
