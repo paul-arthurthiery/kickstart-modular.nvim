@@ -50,21 +50,21 @@ vim.keymap.set('n', '<leader>qr', function()
   -- Remember nvim-tree state before save closes it
   local tree_ok, tree_view = pcall(require, 'nvim-tree.view')
   local tree_was_open = tree_ok and tree_view.is_visible()
-  local flag = vim.fn.stdpath('state') .. '/nvim_tree_was_open'
+  local flag = vim.fn.stdpath 'state' .. '/nvim_tree_was_open'
   if tree_was_open then
     vim.fn.writefile({ '1' }, flag)
   else
     vim.fn.delete(flag)
   end
 
-  vim.cmd('silent! AutoSession save')
+  vim.cmd 'silent! AutoSession save'
 
   local pane = vim.env.TMUX_PANE
   if pane then
     local cwd = vim.fn.getcwd()
     vim.fn.system(string.format("tmux respawn-pane -k -t %s 'cd %s && exec $SHELL -c nvim'", pane, vim.fn.shellescape(cwd)))
   else
-    vim.cmd('qa')
+    vim.cmd 'qa'
   end
 end, { desc = 'Restart nvim (save, quit, relaunch)' })
 
@@ -76,5 +76,12 @@ vim.keymap.set('n', '<leader>j', 'a<CR><Esc>', {
 
 -- Close all buffers except current and nvim-tree
 vim.keymap.set('n', '<leader>bo', '<cmd>BufferLineCloseOthers<cr>', { desc = 'Close all other buffers' })
+
+-- Copy relative file path to clipboard
+vim.keymap.set('n', '<leader>cp', function()
+  local path = vim.fn.fnamemodify(vim.fn.expand '%', ':.')
+  vim.fn.setreg('+', path)
+  vim.notify('Copied: ' .. path)
+end, { desc = '[C]opy relative [p]ath' })
 
 -- vim: ts=2 sts=2 sw=2 et
