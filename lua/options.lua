@@ -69,7 +69,7 @@ vim.o.inccommand = 'split'
 vim.o.cursorline = true
 
 -- Global statusline (always visible, even when nvim-tree is focused)
-vim.o.laststatus = 3
+vim.o.laststatus = 2
 
 -- Minimal number of screen lines to keep above and below the cursor.
 vim.o.scrolloff = 10
