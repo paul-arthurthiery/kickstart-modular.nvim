@@ -12,6 +12,8 @@ return {
         function()
           local ok, api = pcall(require, 'nvim-tree.api')
           if ok and require('nvim-tree.view').is_visible() then
+            -- note nvim-tree was open
+            vim.fn.writefile({ '1' }, vim.fn.stdpath 'state' .. '/nvim_tree_was_open')
             api.tree.close()
           end
         end,
@@ -26,7 +28,7 @@ return {
               vim.api.nvim_buf_delete(buf, { force = true })
             end
           end
-          local flag = vim.fn.stdpath('state') .. '/nvim_tree_was_open'
+          local flag = vim.fn.stdpath 'state' .. '/nvim_tree_was_open'
           if vim.fn.filereadable(flag) == 1 then
             vim.fn.delete(flag)
             local ok, api = pcall(require, 'nvim-tree.api')
