@@ -26,65 +26,61 @@ return {
       diff_float.buf = nil
     end
 
-    local get_pr_context = function()
-      -- Try buffer-local Octo state first
-      local buf_repo = vim.b.octo_repo
-      local buf_number = vim.b.octo_number
+    local get_file_diff_context = function()
+      local bufnr = vim.api.nvim_get_current_buf()
+      local octo_utils = require('octo.utils')
 
-      local repo = buf_repo
-      local number = buf_number
-
-      -- Fallback to env vars if not in an Octo buffer
-      if not repo or repo == '' then
-        repo = vim.env.OCTO_REPO
-      end
-      if not number then
-        number = vim.env.OCTO_PR and tonumber(vim.env.OCTO_PR) or nil
+      if not octo_utils.in_diff_window(bufnr) then
+        return nil, 'Not in an Octo review diff buffer'
       end
 
-      if not repo or repo == '' then
-        return nil, 'Could not determine PR repository'
-      end
-      if not number then
-        return nil, 'Could not determine PR number'
+      local props = vim.b[bufnr].octo_diff_props
+      if not props or not props.path then
+        return nil, 'Could not determine file path from diff buffer'
       end
 
-      local details = vim.fn.systemlist({
-        'gh',
-        'pr',
-        'view',
-        tostring(number),
-        '--repo',
-        repo,
-        '--json',
-        'baseRefName,headRefName',
-        '--jq',
-        '.baseRefName + "\t" + .headRefName',
+      -- Get repo and PR number from env (set by launcher)
+      local repo = vim.env.OCTO_REPO
+      local pr = vim.env.OCTO_PR
+
+      if not repo or repo == '' or not pr or pr == '' then
+        return nil, 'Missing OCTO_REPO/OCTO_PR env vars'
+      end
+
+      -- Get base and head commit SHAs
+      local result = vim.fn.system({
+        'gh', 'pr', 'view', pr,
+        '--repo', repo,
+        '--json', 'baseRefOid,headRefOid',
+        '--jq', '.baseRefOid + "\t" + .headRefOid',
       })
 
-      if vim.v.shell_error ~= 0 or not details[1] or details[1] == '' then
-        return nil, 'Could not fetch PR base/head refs'
+      if vim.v.shell_error ~= 0 or not result or result == '' then
+        return nil, 'Could not fetch PR base/head SHAs'
       end
 
-      local base, head = details[1]:match('^([^\t]+)\t(.+)$')
-      if not base or not head then
+      result = vim.trim(result)
+      local base_sha, head_sha = result:match('^([^\t]+)\t(.+)$')
+      if not base_sha or not head_sha then
         return nil, 'Unexpected gh pr view output'
       end
 
       return {
         repo = repo,
-        base = base,
-        head = head,
+        path = props.path,
+        base_sha = base_sha,
+        head_sha = head_sha,
       }, nil
     end
 
-    local toggle_pr_difft_float = function()
+    local toggle_file_difft_float = function()
+      -- Toggle off if already open
       if diff_float.win and vim.api.nvim_win_is_valid(diff_float.win) then
         close_diff_float()
         return
       end
 
-      local ctx, err = get_pr_context()
+      local ctx, err = get_file_diff_context()
       if err then
         vim.notify(err, vim.log.levels.ERROR)
         return
@@ -104,7 +100,7 @@ return {
         col = col,
         style = 'minimal',
         border = 'rounded',
-        title = string.format(' difft: %s...%s (%s) ', ctx.base, ctx.head, ctx.repo),
+        title = string.format(' difft: %s ', ctx.path),
         title_pos = 'center',
       })
 
@@ -121,12 +117,34 @@ return {
         close_diff_float()
       end, { buffer = buf, silent = true })
 
+      -- Build a script that fetches both file versions via gh api and runs difft
       local term_cmd = string.format(
-        'git fetch origin %s %s --quiet 2>/dev/null; git -c diff.external=difft diff --ext-diff origin/%s...HEAD; echo ""; echo "[Press q to close]"; read -r',
-        vim.fn.shellescape(ctx.base),
-        vim.fn.shellescape(ctx.head),
-        ctx.base
+        [[
+tmpdir=$(mktemp -d)
+trap 'rm -rf "$tmpdir"' EXIT
+
+base_file="$tmpdir/base_%s"
+head_file="$tmpdir/head_%s"
+
+# Fetch base version
+gh api "repos/%s/contents/%s?ref=%s" --jq '.content' 2>/dev/null | base64 -d > "$base_file" 2>/dev/null || echo "" > "$base_file"
+
+# Fetch head version
+gh api "repos/%s/contents/%s?ref=%s" --jq '.content' 2>/dev/null | base64 -d > "$head_file" 2>/dev/null || echo "" > "$head_file"
+
+# Run difftastic
+difft --color=always --display=side-by-side-show-both "$base_file" "$head_file"
+
+echo ""
+echo "[Press q to close]"
+read -r
+]],
+        vim.fn.fnamemodify(ctx.path, ':t'),
+        vim.fn.fnamemodify(ctx.path, ':t'),
+        ctx.repo, ctx.path, ctx.base_sha,
+        ctx.repo, ctx.path, ctx.head_sha
       )
+
       vim.fn.termopen({ 'zsh', '-lc', term_cmd }, {
         on_exit = function()
           vim.schedule(function()
@@ -141,6 +159,6 @@ return {
     vim.keymap.set('n', '<leader>oR', '<cmd>Octo review resume<cr>', { desc = 'Octo review resume' })
     vim.keymap.set('n', '<leader>os', '<cmd>Octo review submit<cr>', { desc = 'Octo review submit' })
     vim.keymap.set('n', '<leader>od', '<cmd>Octo review discard<cr>', { desc = 'Octo review discard' })
-    vim.keymap.set('n', '<leader>op', toggle_pr_difft_float, { desc = 'Octo difftastic peek' })
+    vim.keymap.set('n', '<leader>op', toggle_file_difft_float, { desc = 'Octo difftastic peek (current file)' })
   end,
 }
