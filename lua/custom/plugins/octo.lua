@@ -178,6 +178,34 @@ read -r
         return
       end
 
+      local picker_preview = require('snacks.picker.preview')
+
+      local file_preview = function(ctx)
+        local item = ctx.item
+        if not item or not item._file_entry then
+          return picker_preview.none(ctx)
+        end
+
+        local file = item._file_entry
+        if not file.right_fetched then
+          file:fetch(true)
+        end
+
+        local lines = file.right_lines or {}
+        local max_preview_lines = 200
+        local text = table.concat(vim.list_slice(lines, 1, math.min(#lines, max_preview_lines)), '\n')
+        if text == '' then
+          text = '[empty file]'
+        end
+
+        item.preview = {
+          text = text,
+          ft = vim.filetype.match({ filename = file.path }) or '',
+          loc = false,
+        }
+        return picker_preview.preview(ctx)
+      end
+
       local items = {}
       for i, file in ipairs(layout.files) do
         items[#items + 1] = {
@@ -191,7 +219,8 @@ read -r
       snacks.picker({
         title = 'PR Changed Files',
         items = items,
-        layout = { preview = false, preset = 'vertical' },
+        preview = file_preview,
+        layout = { preset = 'vertical' },
         confirm = function(picker, item)
           picker:close()
           if item and item._file_entry then
@@ -216,11 +245,23 @@ read -r
           local lines = file.right_lines or {}
           for lnum, line in ipairs(lines) do
             if line ~= '' then
+              local from = math.max(1, lnum - 5)
+              local to = math.min(#lines, lnum + 5)
+              local snippet_lines = {}
+              for i = from, to do
+                local prefix = i == lnum and '> ' or '  '
+                snippet_lines[#snippet_lines + 1] = string.format('%s%4d  %s', prefix, i, lines[i])
+              end
               items[#items + 1] = {
                 text = string.format('%s:%d:%s', file.path, lnum, line),
                 file = file.path,
                 lnum = lnum,
                 _file_entry = file,
+                preview = {
+                  text = table.concat(snippet_lines, '\n'),
+                  ft = vim.filetype.match({ filename = file.path }) or '',
+                  loc = false,
+                },
               }
             end
           end
@@ -229,7 +270,8 @@ read -r
         snacks.picker({
           title = 'PR Grep (head)',
           items = items,
-          layout = { preview = false, preset = 'vertical' },
+          preview = 'preview',
+          layout = { preset = 'vertical' },
           confirm = function(picker, item)
             picker:close()
             if not item or not item._file_entry then
@@ -329,6 +371,10 @@ read -r
             end
 
             layout:set_current_file(file)
+            local panel_win = vim.fn.bufwinid(bufnr)
+            if panel_win ~= -1 and vim.api.nvim_win_is_valid(panel_win) then
+              vim.api.nvim_set_current_win(panel_win)
+            end
           end))
         end,
       })
