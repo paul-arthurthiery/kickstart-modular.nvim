@@ -1,5 +1,6 @@
 return {
   'pmizio/typescript-tools.nvim',
+  enabled = not vim.g.octo_review_mode,
   dependencies = { 'nvim-lua/plenary.nvim' },
   ft = { 'typescript', 'typescriptreact', 'javascript', 'javascriptreact' },
   opts = {
