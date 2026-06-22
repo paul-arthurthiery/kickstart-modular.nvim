@@ -84,4 +84,9 @@ vim.keymap.set('n', '<leader>cp', function()
   vim.notify('Copied: ' .. path)
 end, { desc = '[C]opy relative [p]ath' })
 
+vim.keymap.set('v', '<leader>oB', function()
+  local selection = vim.fn.getregion(vim.fn.getpos 'v', vim.fn.getpos '.', { type = 'v' })
+  vim.ui.open(vim.trim(table.concat(selection, '')))
+end, { desc = 'Open selection in browser' })
+
 -- vim: ts=2 sts=2 sw=2 et

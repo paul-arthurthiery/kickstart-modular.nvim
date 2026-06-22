@@ -12,6 +12,78 @@ return {
   },
   config = function(_, opts)
     require('octo').setup(opts)
+
+    local utils = require('octo.utils')
+    utils.merge_state_hl_map['IN_QUEUE']      = 'OctoStatePending'
+    utils.merge_state_message_map['IN_QUEUE'] = '⟳ IN-QUEUE'
+    utils.mergeable_hl_map['UNKNOWN']         = 'OctoStatePending'
+    utils.mergeable_message_map['UNKNOWN']    = ' UNKNOWN'
+    utils.state_map['ACTION_REQUIRED']        = { symbol = '! ', hl = 'OctoStateDismissed' }
+
+    -- Monkey-patch write_review_thread_header to split into two virtual text
+    -- lines so that long file paths don't push the resolved/outdated badges
+    -- off-screen. Line 1: path + line range. Line 2: commit + status badges.
+    local writers = require 'octo.ui.writers'
+    local constants = require 'octo.constants'
+    local bubbles = require 'octo.ui.bubbles'
+    local octo_config = require 'octo.config'
+
+    writers.write_review_thread_header = function(bufnr, opts, line)
+      line = line or vim.api.nvim_buf_line_count(bufnr) - 1
+      local conf = octo_config.values
+
+      vim.api.nvim_buf_clear_namespace(bufnr, constants.OCTO_THREAD_HEADER_VT_NS, line, line + 3)
+
+      local indent = string.rep(' ', conf.timeline_indent) .. conf.timeline_marker .. ' '
+
+      -- Line 1: path + line range
+      local line1_vt = {
+        { indent, 'OctoTimelineMarker' },
+        { 'THREAD: ', 'OctoTimelineItemHeading' },
+        { '[', 'OctoSymbol' },
+        { opts.path .. ' ', 'OctoDetailsLabel' },
+        { tostring(opts.start_line) .. ':' .. tostring(opts.end_line), 'OctoDetailsValue' },
+        { ']', 'OctoSymbol' },
+      }
+
+      -- Line 2: commit + status badges
+      local line2_vt = {
+        { indent, 'OctoTimelineMarker' },
+        { '[Commit: ', 'OctoSymbol' },
+        { opts.commit, 'OctoDetailsLabel' },
+        { '] ', 'OctoSymbol' },
+      }
+
+      if opts.isOutdated then
+        vim.list_extend(line2_vt, bubbles.make_bubble('Outdated', 'OctoBubbleYellow', { margin_width = 1 }))
+      end
+
+      if opts.isResolved then
+        vim.list_extend(line2_vt, bubbles.make_bubble('Resolved', 'OctoBubbleGreen', { margin_width = 1 }))
+        if opts.resolvedBy then
+          vim.list_extend(line2_vt, {
+            { ' [by: ', 'OctoSymbol' },
+            { opts.resolvedBy.login, 'OctoDetailsLabel' },
+            { ']', 'OctoSymbol' },
+          })
+        end
+      end
+
+      -- Insert two blank anchor lines then overlay both with virtual text
+      local write_block = writers.write_block
+      write_block(bufnr, { '', '' })
+      vim.api.nvim_buf_set_extmark(bufnr, constants.OCTO_THREAD_HEADER_VT_NS, line + 1, 0, {
+        virt_text = line1_vt,
+        virt_text_pos = 'overlay',
+        hl_mode = 'combine',
+      })
+      vim.api.nvim_buf_set_extmark(bufnr, constants.OCTO_THREAD_HEADER_VT_NS, line + 2, 0, {
+        virt_text = line2_vt,
+        virt_text_pos = 'overlay',
+        hl_mode = 'combine',
+      })
+    end
+
     local snacks = require('snacks')
 
     if vim.g.octo_review_mode then
@@ -160,7 +232,6 @@ read -r
           end)
         end,
       })
-      vim.cmd 'startinsert'
     end
 
     local in_octo_review = function()
@@ -169,6 +240,51 @@ read -r
         return false
       end
       return reviews.get_current_layout() ~= nil
+    end
+
+    local extract_image_url = function(line)
+      local url = line:match('src%s*=%s*"(https?://[^"]+)"')
+      if url then
+        return url
+      end
+
+      url = line:match("src%s*=%s*'(https?://[^']+)'")
+      if url then
+        return url
+      end
+
+      url = line:match('!%b[]%((https?://[^)%s]+)')
+      if url then
+        return url
+      end
+
+      url = line:match('(https?://%S+)')
+      if not url then
+        return nil
+      end
+
+      return (url:gsub("[)>\"']+$", ''))
+    end
+
+    local open_image_url_under_cursor = function()
+      if vim.bo.filetype ~= 'octo' then
+        vim.notify('Image URL opener is only enabled for octo buffers', vim.log.levels.WARN)
+        return
+      end
+
+      local line = vim.api.nvim_get_current_line()
+      local url = extract_image_url(line)
+      if not url then
+        vim.notify('No image URL found on this line', vim.log.levels.INFO)
+        return
+      end
+
+      if vim.ui and vim.ui.open then
+        vim.ui.open(url)
+        return
+      end
+
+      vim.fn.jobstart({ 'open', url }, { detach = true })
     end
 
     local open_pr_files_picker = function()
@@ -192,8 +308,7 @@ read -r
         end
 
         local lines = file.right_lines or {}
-        local max_preview_lines = 200
-        local text = table.concat(vim.list_slice(lines, 1, math.min(#lines, max_preview_lines)), '\n')
+        local text = table.concat(lines, '\n')
         if text == '' then
           text = '[empty file]'
         end
@@ -220,7 +335,6 @@ read -r
         title = 'PR Changed Files',
         items = items,
         preview = file_preview,
-        layout = { preset = 'vertical' },
         confirm = function(picker, item)
           picker:close()
           if item and item._file_entry then
@@ -245,22 +359,16 @@ read -r
           local lines = file.right_lines or {}
           for lnum, line in ipairs(lines) do
             if line ~= '' then
-              local from = math.max(1, lnum - 5)
-              local to = math.min(#lines, lnum + 5)
-              local snippet_lines = {}
-              for i = from, to do
-                local prefix = i == lnum and '> ' or '  '
-                snippet_lines[#snippet_lines + 1] = string.format('%s%4d  %s', prefix, i, lines[i])
-              end
               items[#items + 1] = {
                 text = string.format('%s:%d:%s', file.path, lnum, line),
                 file = file.path,
                 lnum = lnum,
+                pos = { lnum, 0 },
                 _file_entry = file,
                 preview = {
-                  text = table.concat(snippet_lines, '\n'),
+                  text = table.concat(file.right_lines or {}, '\n'),
                   ft = vim.filetype.match({ filename = file.path }) or '',
-                  loc = false,
+                  loc = true,
                 },
               }
             end
@@ -271,7 +379,6 @@ read -r
           title = 'PR Grep (head)',
           items = items,
           preview = 'preview',
-          layout = { preset = 'vertical' },
           confirm = function(picker, item)
             picker:close()
             if not item or not item._file_entry then
@@ -392,6 +499,63 @@ read -r
       })
     end
 
+    vim.api.nvim_create_autocmd('FileType', {
+      pattern = 'octo',
+      callback = function(args)
+        vim.keymap.set('n', '<leader>r', '<Nop>', { buffer = args.buf })
+        vim.keymap.set('x', '<leader>r', '<Nop>', { buffer = args.buf })
+        local ufo = require('ufo')
+        ufo.detach(args.buf)
+        ufo.attach(args.buf)
+
+        vim.schedule(function()
+          if not vim.api.nvim_buf_is_valid(args.buf) then return end
+          vim.keymap.set('n', '<C-r>', function()
+            local bufnr = vim.api.nvim_get_current_buf()
+            local done = false
+            local notif_id = 'octo_refresh_' .. bufnr
+            local frames = { '⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏' }
+            local frame = 0
+            local spinner_timer = vim.uv.new_timer()
+            local timeout_timer = vim.uv.new_timer()
+
+            local function finish(success)
+              if done then return end
+              done = true
+              spinner_timer:stop()
+              spinner_timer:close()
+              timeout_timer:stop()
+              timeout_timer:close()
+              Snacks.notifier.hide(notif_id)
+              if success then
+                vim.notify('PR refreshed', vim.log.levels.INFO, { timeout = 2000 })
+              else
+                vim.notify('PR refresh timed out', vim.log.levels.WARN, { timeout = 3000 })
+              end
+            end
+
+            vim.notify('Refreshing PR…', vim.log.levels.INFO, { id = notif_id, timeout = false, icon = frames[1] })
+            spinner_timer:start(80, 80, vim.schedule_wrap(function()
+              frame = (frame + 1) % #frames
+              vim.notify('Refreshing PR…', vim.log.levels.INFO, { id = notif_id, timeout = false, icon = frames[frame + 1] })
+            end))
+
+            vim.api.nvim_create_autocmd('TextChanged', {
+              buffer = bufnr,
+              once = true,
+              callback = function() finish(true) end,
+            })
+
+            timeout_timer:start(30000, 0, vim.schedule_wrap(function()
+              finish(false)
+            end))
+
+            require('octo.commands').reload()
+          end, { buffer = args.buf, desc = 'Refresh PR with spinner' })
+        end)
+      end,
+    })
+
     vim.api.nvim_create_autocmd('BufEnter', {
       callback = function(args)
         local reviews = require('octo.reviews')
@@ -406,6 +570,7 @@ read -r
       end,
     })
 
+    vim.keymap.set('n', '<leader>oc', '<cmd>Octo pr checks<cr>', { desc = 'Octo PR checks' })
     vim.keymap.set('n', '<leader>or', '<cmd>Octo review start<cr>', { desc = 'Octo review start' })
     vim.keymap.set('n', '<leader>oR', '<cmd>Octo review resume<cr>', { desc = 'Octo review resume' })
     vim.keymap.set('n', '<leader>os', '<cmd>Octo review submit<cr>', { desc = 'Octo review submit' })
@@ -434,6 +599,9 @@ read -r
 
       nav.open_in_browser()
     end, { desc = 'Octo open in browser' })
+    vim.keymap.set('n', '<leader>oi', open_image_url_under_cursor, { desc = 'Octo open image URL' })
+    vim.keymap.set('n', '<leader>oy', '<cmd>Octo comment url<cr>', { desc = 'Octo copy comment URL to clipboard' })
+    vim.keymap.set('n', '<leader>oY', '<cmd>Octo pr url<cr>', { desc = 'Octo copy PR URL to clipboard' })
     vim.keymap.set('n', '<leader>sf', function()
       if in_octo_review() then
         open_pr_files_picker()

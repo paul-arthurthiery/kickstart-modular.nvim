@@ -86,6 +86,9 @@ return {
 
       sources = {
         default = { 'lsp', 'path', 'snippets', 'lazydev', 'emoji' },
+        per_filetype = {
+          octo = { 'octo_omni', 'snippets', 'emoji' },
+        },
         providers = {
           lazydev = { module = 'lazydev.integrations.blink', score_offset = 100 },
           emoji = {
@@ -98,6 +101,20 @@ return {
               end
               return items
             end,
+          },
+          octo_omni = {
+            name = 'OctoMentions',
+            module = 'blink.cmp.sources.complete_func',
+            opts = {
+              complete_func = function()
+                return 'v:lua.octo_omnifunc'
+              end,
+            },
+            override = {
+              get_trigger_characters = function()
+                return { '@', '#' }
+              end,
+            },
           },
         },
       },

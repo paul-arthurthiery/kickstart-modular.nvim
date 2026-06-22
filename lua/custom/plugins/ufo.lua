@@ -8,7 +8,8 @@ return {
     { 'zK', function() require('ufo').peekFoldedLinesUnderCursor() end, desc = 'Peek fold' },
   },
   opts = {
-    provider_selector = function(_, _, _)
+    provider_selector = function(_, filetype, _)
+      if filetype == 'octo' then return require('custom.octo-ufo-provider') end
       return { 'lsp', 'indent' }
     end,
     fold_virt_text_handler = function(virtText, lnum, endLnum, width, truncate)
