@@ -105,6 +105,7 @@ return {
   },
   opts = {
     lazygit = {},
+    notifier = {},
   },
   init = function()
     local augroup = vim.api.nvim_create_augroup('LazygitEdit', { clear = true })
