@@ -8,6 +8,11 @@ vim.api.nvim_create_autocmd({ 'FocusGained', 'BufEnter' }, {
   command = 'checktime',
 })
 
+-- Silently discard stale swap files (safe: nvim never crashes here)
+vim.api.nvim_create_autocmd('SwapExists', {
+  callback = function() vim.v.swapchoice = 'e' end,
+})
+
 -- Make line numbers default
 vim.o.number = true
 -- You can also add relative line numbers, to help with jumping.
