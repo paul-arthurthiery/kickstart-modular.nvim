@@ -1,6 +1,9 @@
 -- [[ Basic Keymaps ]]
 --  See `:help vim.keymap.set()`
 
+-- Jump past closing delimiter (bracket, paren, quote) without leaving insert mode
+vim.keymap.set('i', '<C-l>', '<Right>', { desc = 'Jump past closing delimiter' })
+
 -- Clear highlights on search when pressing <Esc> in normal mode
 --  See `:help hlsearch`
 vim.keymap.set('n', '<Esc>', '<cmd>nohlsearch<CR>')
@@ -68,10 +71,10 @@ vim.keymap.set('n', '<leader>qr', function()
   end
 end, { desc = 'Restart nvim (save, quit, relaunch)' })
 
--- Break line keymap
-vim.keymap.set('n', '<leader>j', 'a<CR><Esc>', {
+-- Break line at cursor and continue editing on the new line
+vim.keymap.set('n', '<leader>j', 'a<CR><Esc>O', {
   silent = true,
-  desc = 'Break line at cursor',
+  desc = 'Break line at cursor and insert',
 })
 
 -- Close all buffers except current and nvim-tree
@@ -88,5 +91,34 @@ vim.keymap.set('v', '<leader>oB', function()
   local selection = vim.fn.getregion(vim.fn.getpos 'v', vim.fn.getpos '.', { type = 'v' })
   vim.ui.open(vim.trim(table.concat(selection, '')))
 end, { desc = 'Open selection in browser' })
+
+-- Fix common typos
+do
+  local abbrevs = {
+    ['W'] = 'w',
+    ['Q'] = 'q',
+    ['W1'] = 'w!',
+    ['w1'] = 'w!',
+    ['Q1'] = 'q!',
+    ['q1'] = 'q!',
+    ['Qa'] = 'qa',
+    ['Qa1'] = 'qa!',
+    ['Wq'] = 'wq',
+    ['Wa'] = 'wa',
+    ['wq1'] = 'wq!',
+    ['Wq1'] = 'wq!',
+    ['wa1'] = 'wa!',
+    ['Wa1'] = 'wa!',
+  }
+  for k, v in pairs(abbrevs) do
+    vim.keymap.set('ca', k, v)
+  end
+  -- auto expand abbrevations on enter
+  vim.keymap.set({ 'c' }, '<CR>', '<C-]><CR>')
+end
+
+-- Keep matches center screen when cycling with n|N
+vim.keymap.set('n', 'n', 'nzzzv', { desc = "Fwd  search '/' or '?'" })
+vim.keymap.set('n', 'N', 'Nzzzv', { desc = "Back search '/' or '?'" })
 
 -- vim: ts=2 sts=2 sw=2 et
