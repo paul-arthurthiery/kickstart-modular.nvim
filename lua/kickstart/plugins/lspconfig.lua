@@ -230,7 +230,20 @@ return {
       local servers = {
         -- clangd = {},
         -- gopls = {},
-        -- pyright = {},
+        basedpyright = {
+          settings = {
+            basedpyright = {
+              analysis = {
+                autoSearchPaths = true,
+                useLibraryCodeForTypes = true,
+                diagnosticMode = 'openFilesOnly',
+              },
+            },
+            python = {
+              pythonPath = vim.fn.exepath 'python',
+            },
+          },
+        },
         rust_analyzer = {},
         -- ... etc. See `:help lspconfig-all` for a list of all the pre-configured LSPs
         --
@@ -238,6 +251,7 @@ return {
         -- TypeScript/JavaScript is handled by typescript-tools.nvim (see custom/plugins/typescript-tools.lua)
 
         eslint = {},
+        tailwindcss = {},
         --
 
         lua_ls = {
@@ -272,6 +286,9 @@ return {
       local ensure_installed = vim.tbl_keys(servers or {})
       vim.list_extend(ensure_installed, {
         'stylua', -- Used to format Lua code
+        'markdownlint', -- Used to lint markdown files
+        'black', -- Default Python formatter
+        'ruff', -- Alternative Python formatter (used when project has ruff config)
       })
       require('mason-tool-installer').setup { ensure_installed = ensure_installed }
 

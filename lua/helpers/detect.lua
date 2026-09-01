@@ -40,6 +40,18 @@ local formatter_defs = {
   },
 }
 
+---@type ToolDef[]
+local py_formatter_defs = {
+  {
+    name = 'ruff_format',
+    markers = { 'ruff.toml', '.ruff.toml' },
+  },
+  {
+    name = 'black',
+    markers = { '.black', 'pyproject.toml', 'setup.cfg', '.flake8' },
+  },
+}
+
 --- Search upward from the buffer's directory for any of the given marker files.
 ---@param bufnr integer
 ---@param markers string[]
@@ -62,12 +74,14 @@ end
 ---@param name string
 ---@return boolean
 local function is_available(bufnr, name)
-  if vim.fn.executable(name) == 1 then
+  -- ruff_format is conform's wrapper around the ruff binary
+  local bin = name == 'ruff_format' and 'ruff' or name
+  if vim.fn.executable(bin) == 1 then
     return true
   end
   local bufname = vim.api.nvim_buf_get_name(bufnr)
   if bufname ~= '' then
-    local found = vim.fs.find('node_modules/.bin/' .. name, {
+    local found = vim.fs.find('node_modules/.bin/' .. bin, {
       upward = true,
       path = vim.fs.dirname(bufname),
       stop = vim.uv.os_homedir(),
@@ -100,6 +114,40 @@ function M.formatter(bufnr)
   end
 
   vim.b[bufnr]._detected_formatter = result
+  return result
+end
+
+--- Detect which formatter to use for a Python buffer.
+--- Prefers ruff if the project has a ruff config, otherwise black.
+--- Falls back to whichever binary is available (black preferred).
+---@param bufnr integer
+---@return string[]
+function M.py_formatter(bufnr)
+  if vim.b[bufnr]._detected_py_formatter then
+    return vim.b[bufnr]._detected_py_formatter
+  end
+
+  local result = {}
+
+  -- Config-based detection (first match wins)
+  for _, def in ipairs(py_formatter_defs) do
+    if has_config(bufnr, def.markers) and is_available(bufnr, def.name) then
+      result = { def.name }
+      break
+    end
+  end
+
+  -- No config found: fall back to black, then ruff_format
+  if #result == 0 then
+    for _, name in ipairs { 'black', 'ruff_format' } do
+      if is_available(bufnr, name) then
+        result = { name }
+        break
+      end
+    end
+  end
+
+  vim.b[bufnr]._detected_py_formatter = result
   return result
 end
 

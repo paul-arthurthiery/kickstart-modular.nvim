@@ -18,6 +18,7 @@ local parsers = {
   'typescript',
   'tsx',
   'rust',
+  'python',
   'groovy',
   'java',
 }

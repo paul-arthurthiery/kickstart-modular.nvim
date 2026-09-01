@@ -9,6 +9,9 @@ local js_fts = {
 
 local formatters_by_ft = {
   lua = { 'stylua' },
+  python = function(bufnr)
+    return detect.py_formatter(bufnr)
+  end,
 }
 
 -- JS/TS filetypes use dynamic detection for formatter only
