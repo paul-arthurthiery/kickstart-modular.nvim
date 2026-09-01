@@ -82,6 +82,117 @@ local grep_directory = function()
     show_picker(dirs)
   end
 end
+local show_range_diff = function(vs_head, sel_start, sel_end)
+  if sel_start > sel_end then
+    sel_start, sel_end = sel_end, sel_start
+  end
+
+  local file = vim.fn.expand '%:p'
+  local rel_file = vim.fn.expand '%'
+
+  vim.notify(string.format('range: %d-%d', sel_start, sel_end), vim.log.levels.INFO)
+
+  if file == '' then
+    vim.notify('No file in current buffer', vim.log.levels.WARN)
+    return
+  end
+
+  local cmd = vs_head and { 'git', 'diff', 'HEAD', '--', file } or { 'git', 'diff', '--', file }
+
+  vim.system(cmd, { text = true }, function(result)
+    vim.schedule(function()
+      if result.code ~= 0 then
+        vim.notify('git diff failed: ' .. (result.stderr or ''), vim.log.levels.ERROR)
+        return
+      end
+
+      local output = result.stdout or ''
+      if output == '' then
+        vim.notify('No changes in selection', vim.log.levels.INFO)
+        return
+      end
+
+      -- Parse unified diff, collect only hunks overlapping the selection
+      local matched_lines = {}
+      local current_hunk = nil
+      local hunk_start, hunk_end
+
+      local function flush()
+        if current_hunk and hunk_start <= sel_end and hunk_end >= sel_start then
+          local kept = {}
+          local new_line = hunk_start
+          for i, l in ipairs(current_hunk) do
+            if i == 1 then
+              -- @@ header, added below only if we keep something
+            elseif l:match '^%-' then
+              -- removed line: emit if within selection range
+              if new_line >= sel_start and new_line <= sel_end then
+                table.insert(kept, l)
+              end
+            elseif l:match '^%+' then
+              -- added line: emit only if in selection range
+              if new_line >= sel_start and new_line <= sel_end then
+                table.insert(kept, l)
+              end
+              new_line = new_line + 1
+            else
+              -- context line: advance counter, keep it
+              if new_line >= sel_start and new_line <= sel_end then
+                table.insert(kept, l)
+              end
+              new_line = new_line + 1
+            end
+          end
+          if #kept > 0 then
+            table.insert(matched_lines, current_hunk[1]) -- @@ header
+            for _, l in ipairs(kept) do
+              table.insert(matched_lines, l)
+            end
+          end
+        end
+        current_hunk = nil
+      end
+
+      for line in output:gmatch '[^\n]*' do
+        if line == '' then
+          goto continue
+        end
+        local trimmed = line:match '^%s*(.*)'
+        local c, d = trimmed:match '^@@ %-%d+,?%d* %+(%d+),?(%d*) @@'
+        if c then
+          flush()
+          c = tonumber(c)
+          d = d == '' and 1 or tonumber(d)
+          hunk_start = c
+          hunk_end = c + (d > 0 and d - 1 or 0)
+          current_hunk = { trimmed }
+        elseif current_hunk then
+          table.insert(current_hunk, trimmed)
+        end
+        ::continue::
+      end
+      flush()
+
+      if #matched_lines == 0 then
+        vim.notify('No changes in selection', vim.log.levels.INFO)
+        return
+      end
+
+      local label = vs_head and 'HEAD' or 'index'
+      Snacks.win.new {
+        title = string.format(' diff vs %s (L%d–%d) ', label, sel_start, sel_end),
+        title_pos = 'center',
+        text = table.concat(matched_lines, '\n'),
+        ft = 'diff',
+        width = 0.7,
+        height = 0.4,
+        bo = { modifiable = false, readonly = true },
+        keys = { q = 'close' },
+      }
+    end)
+  end)
+end
+
 -- The default nvim-remote preset opens files in a new tabpage because the
 -- floating terminal can't :edit. We intercept this with a TabNewEntered
 -- autocmd that moves the buffer back and closes the extra tabpage.
@@ -102,10 +213,47 @@ return {
       end,
       desc = 'Grep in directory',
     },
+    {
+      '<leader>hd',
+      function()
+        show_range_diff(false, vim.fn.line "'<", vim.fn.line "'>")
+      end,
+      mode = 'v',
+      desc = 'git [d]iff selection vs index',
+    },
+    {
+      '<leader>hD',
+      function()
+        show_range_diff(true, vim.fn.line "'<", vim.fn.line "'>")
+      end,
+      mode = 'v',
+      desc = 'git [D]iff selection vs HEAD',
+    },
   },
   opts = {
     lazygit = {},
     notifier = {},
+    image = {
+      formats = {
+        'png',
+        'jpg',
+        'jpeg',
+        'gif',
+        'bmp',
+        'webp',
+        'tiff',
+        'heic',
+        'avif',
+        'mp4',
+        'mov',
+        'avi',
+        'mkv',
+        'webm',
+        'pdf',
+        'icns',
+        'svg',
+      },
+    },
   },
   init = function()
     local augroup = vim.api.nvim_create_augroup('LazygitEdit', { clear = true })
