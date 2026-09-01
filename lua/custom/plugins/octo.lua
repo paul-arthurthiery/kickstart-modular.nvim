@@ -13,12 +13,12 @@ return {
   config = function(_, opts)
     require('octo').setup(opts)
 
-    local utils = require('octo.utils')
-    utils.merge_state_hl_map['IN_QUEUE']      = 'OctoStatePending'
+    local utils = require 'octo.utils'
+    utils.merge_state_hl_map['IN_QUEUE'] = 'OctoStatePending'
     utils.merge_state_message_map['IN_QUEUE'] = '⟳ IN-QUEUE'
-    utils.mergeable_hl_map['UNKNOWN']         = 'OctoStatePending'
-    utils.mergeable_message_map['UNKNOWN']    = ' UNKNOWN'
-    utils.state_map['ACTION_REQUIRED']        = { symbol = '! ', hl = 'OctoStateDismissed' }
+    utils.mergeable_hl_map['UNKNOWN'] = 'OctoStatePending'
+    utils.mergeable_message_map['UNKNOWN'] = ' UNKNOWN'
+    utils.state_map['ACTION_REQUIRED'] = { symbol = '! ', hl = 'OctoStateDismissed' }
 
     -- Monkey-patch write_review_thread_header to split into two virtual text
     -- lines so that long file paths don't push the resolved/outdated badges
@@ -84,13 +84,216 @@ return {
       })
     end
 
-    local snacks = require('snacks')
+    -- Monkey-patch Review:add_comment to hide any existing thread buffer before
+    -- creating a new comment stub. Without this, if the visual selection starts
+    -- or ends on a line that already has a thread, show_review_threads() renders
+    -- the existing buffer, and create_thread_buffer() then finds a buffer with
+    -- the same name (same line) and returns the old one instead of a fresh stub.
+    --
+    -- The real collision happens inside add_comment itself: it calls
+    -- show_review_threads() (which loads the existing thread buffer), then
+    -- immediately calls create_thread_buffer() with the stub. The stub generates
+    -- the same bufname as the existing thread (same path+line), so the cache
+    -- check returns the old buffer. We fix this by patching create_thread_buffer
+    -- to force-delete the cached buffer when the threads list contains a stub
+    -- (id == -1), so a fresh buffer is always created for new comments.
+    local thread_panel = require 'octo.reviews.thread-panel'
+    local _orig_create_thread_buffer = thread_panel.create_thread_buffer
+    thread_panel.create_thread_buffer = function(threads, repo, number, side, path)
+      -- If this is a new-comment stub (id == -1), evict any cached buffer that
+      -- shares the same generated name so we never reuse an existing thread.
+      if threads and threads[1] and threads[1].id == -1 then
+        if not vim.startswith(path, '/') then
+          path = '/' .. path
+        end
+        local line = threads[1].originalStartLine ~= vim.NIL and threads[1].originalStartLine or threads[1].originalLine
+        local current_review = require('octo.reviews').get_current_review()
+        if current_review then
+          local bufname = string.format('octo://%s/review/%s/threads/%s%s:%d', repo, current_review.id, side, path, line)
+          local existing = vim.fn.bufnr(bufname)
+          if existing ~= -1 then
+            vim.api.nvim_buf_delete(existing, { force = true })
+          end
+        end
+      end
+      return _orig_create_thread_buffer(threads, repo, number, side, path)
+    end
+
+    -- Monkey-patch FilePanel:render to show "old/path → new/path" for renamed
+    -- files instead of just the new path. octo already tracks file.previous_path
+    -- for status == "R" entries (from GitHub's previous_filename), it just never
+    -- renders it. We reproduce the full render function and append the old path
+    -- right after the path is written, since everything after that point in the
+    -- line (thread-count bubbles) recomputes its offset from #s fresh, so this
+    -- is safe to insert without breaking alignment.
+    do
+      local file_panel_mod = require 'octo.reviews.file-panel'
+      local FilePanel = file_panel_mod.FilePanel
+      local renderer = require 'octo.reviews.renderer'
+      local octo_utils = require 'octo.utils'
+      local octo_config = require 'octo.config'
+
+      FilePanel.render = function(self)
+        local current_review = require('octo.reviews').get_current_review()
+        if not current_review then
+          return
+        end
+
+        if not self.render_data then
+          return
+        end
+
+        self.render_data:clear()
+        local line_idx = 0
+        local lines = self.render_data.lines
+        local function add_hl(...)
+          self.render_data:add_hl(...)
+        end
+
+        local conf = octo_config.values
+        local strlen = vim.fn.strlen
+        local s = 'Files changed'
+        add_hl('OctoFilePanelTitle', line_idx, 0, #s)
+        local change_count = string.format('%s%d%s', conf.left_bubble_delimiter, #self.files, conf.right_bubble_delimiter)
+        add_hl('OctoBubbleDelimiterYellow', line_idx, strlen(s) + 1, strlen(s) + 1 + strlen(conf.left_bubble_delimiter))
+        add_hl(
+          'OctoBubbleYellow',
+          line_idx,
+          strlen(s) + 1 + strlen(conf.left_bubble_delimiter),
+          strlen(s) + 1 + strlen(change_count) - strlen(conf.right_bubble_delimiter)
+        )
+        add_hl(
+          'OctoBubbleDelimiterYellow',
+          line_idx,
+          strlen(s) + 1 + strlen(change_count) - strlen(conf.right_bubble_delimiter),
+          strlen(s) + 1 + strlen(change_count)
+        )
+        s = s .. ' ' .. change_count
+        table.insert(lines, s)
+        line_idx = line_idx + 1
+
+        local max_changes_length = 0
+        local max_path_length = 0
+        for _, file in ipairs(self.files) do
+          local diffstat = octo_utils.diffstat(file.stats)
+          max_changes_length = math.max(max_changes_length, string.len(diffstat.total))
+          max_path_length = math.max(max_path_length, string.len(file.path))
+        end
+
+        for _, file in ipairs(self.files) do
+          local offset = 0
+          s = ''
+
+          if file.stats then
+            local diffstat = octo_utils.diffstat(file.stats)
+            local file_changes_length = string.len(diffstat.total)
+            s = string.rep(' ', max_changes_length - file_changes_length) .. diffstat.total .. ' '
+            offset = #s
+            if diffstat.additions > 0 then
+              s = s .. string.rep('■', diffstat.additions)
+              add_hl('OctoDiffstatAdditions', line_idx, offset, offset + (3 * diffstat.additions))
+              offset = offset + (3 * diffstat.additions)
+            end
+            if diffstat.deletions > 0 then
+              s = s .. string.rep('■', diffstat.deletions)
+              add_hl('OctoDiffstatDeletions', line_idx, offset, offset + (3 * diffstat.deletions))
+              offset = offset + (3 * diffstat.deletions)
+            end
+            if diffstat.neutral > 0 then
+              s = s .. string.rep('■', diffstat.neutral)
+              add_hl('OctoDiffstatNeutral', line_idx, offset, offset + (3 * diffstat.neutral))
+              offset = offset + (3 * diffstat.neutral)
+            end
+          end
+
+          add_hl(renderer.get_git_hl(file.status), line_idx, offset + 1, offset + 2)
+          s = s .. ' ' .. file.status
+          offset = #s
+
+          if not file.viewed_state then
+            file.viewed_state = 'UNVIEWED'
+          end
+          local viewerViewedStateIcon = octo_utils.viewed_state_map[file.viewed_state].icon
+          local viewerViewedStateHl = octo_utils.viewed_state_map[file.viewed_state].hl
+          s = s .. ' ' .. viewerViewedStateIcon
+          add_hl(viewerViewedStateHl, line_idx, offset + 1, offset + 4)
+          offset = #s
+
+          local icon = renderer.get_file_icon(file.basename, file.extension, self.render_data, line_idx, offset)
+          offset = offset + #icon
+
+          -- file path
+          add_hl('OctoFilePanelFileName', line_idx, offset, offset + #file.path)
+          s = s .. icon .. file.path
+
+          -- >>> our addition: show old path for renames <
+          if file.status == 'R' and file.previous_path then
+            local rename_suffix = '  ⟵ ' .. file.previous_path
+            add_hl('OctoDim', line_idx, #s, #s + #rename_suffix)
+            s = s .. rename_suffix
+          end
+          -- >>> end addition <
+
+          local active, resolved, outdated, pending = file_panel_mod.thread_counts(file.path)
+          if active > 0 or resolved > 0 or pending > 0 or outdated > 0 then
+            offset = #s + 1
+            s = s .. string.rep(' ', max_path_length + 1 - string.len(file.path))
+          end
+          local segments = {
+            { count = active, prefix = 'active: ', center_hl = 'OctoBubbleBlue', delimiter_hl = 'OctoBubbleDelimiterBlue' },
+            { count = pending, prefix = 'pending: ', center_hl = 'OctoBubbleYellow', delimiter_hl = 'OctoBubbleDelimiterYellow' },
+            { count = resolved, prefix = 'resolved: ', center_hl = 'OctoBubbleGreen', delimiter_hl = 'OctoBubbleDelimiterGreen' },
+            { count = outdated, prefix = 'outdated: ', center_hl = 'OctoBubbleRed', delimiter_hl = 'OctoBubbleDelimiterRed' },
+          }
+          for _, segment in ipairs(segments) do
+            if segment.count > 0 then
+              offset = #s + 1
+              local str = string.format('%s%s%d%s', segment.prefix, conf.left_bubble_delimiter, segment.count, conf.right_bubble_delimiter)
+              add_hl('OctoMissingDetails', line_idx, offset, offset + string.len(segment.prefix))
+              add_hl(segment.delimiter_hl, line_idx, offset + strlen(segment.prefix), offset + strlen(segment.prefix) + strlen(conf.left_bubble_delimiter))
+              add_hl(
+                segment.center_hl,
+                line_idx,
+                offset + strlen(segment.prefix) + strlen(conf.left_bubble_delimiter),
+                offset + strlen(str) - strlen(conf.right_bubble_delimiter)
+              )
+              add_hl(segment.delimiter_hl, line_idx, offset + strlen(str) - strlen(conf.right_bubble_delimiter), offset + strlen(str))
+              s = s .. ' ' .. str
+            end
+          end
+
+          table.insert(lines, s)
+          line_idx = line_idx + 1
+        end
+
+        local right = current_review.layout.right
+        local left = current_review.layout.left
+        local extra_info = { left:abbrev() .. '..' .. right:abbrev() }
+        table.insert(lines, '')
+        line_idx = line_idx + 1
+
+        s = 'Showing changes for:'
+        add_hl('DiffviewFilePanelTitle', line_idx, 0, #s)
+        table.insert(lines, s)
+        line_idx = line_idx + 1
+
+        for _, arg in ipairs(extra_info) do
+          s = arg
+          add_hl('DiffviewFilePanelPath', line_idx, 0, #s)
+          table.insert(lines, s)
+          line_idx = line_idx + 1
+        end
+      end
+    end
+
+    local snacks = require 'snacks'
 
     if vim.g.octo_review_mode then
       vim.api.nvim_set_hl(0, 'DiffAdd', { bg = '#1a3a2a' })
       vim.api.nvim_set_hl(0, 'DiffDelete', { bg = '#3a1a1a' })
       vim.api.nvim_set_hl(0, 'DiffChange', { bg = 'NONE' })
       vim.api.nvim_set_hl(0, 'DiffText', { bg = '#2a4a3a' })
+      vim.api.nvim_set_hl(0, 'OctoDim', { fg = '#6c7086', italic = true })
     end
 
     local diff_float = {
@@ -108,7 +311,7 @@ return {
 
     local get_file_diff_context = function()
       local bufnr = vim.api.nvim_get_current_buf()
-      local octo_utils = require('octo.utils')
+      local octo_utils = require 'octo.utils'
 
       if not octo_utils.in_diff_window(bufnr) then
         return nil, 'Not in an Octo review diff buffer'
@@ -128,19 +331,25 @@ return {
       end
 
       -- Get base and head commit SHAs
-      local result = vim.fn.system({
-        'gh', 'pr', 'view', pr,
-        '--repo', repo,
-        '--json', 'baseRefOid,headRefOid',
-        '--jq', '.baseRefOid + "\t" + .headRefOid',
-      })
+      local result = vim.fn.system {
+        'gh',
+        'pr',
+        'view',
+        pr,
+        '--repo',
+        repo,
+        '--json',
+        'baseRefOid,headRefOid',
+        '--jq',
+        '.baseRefOid + "\t" + .headRefOid',
+      }
 
       if vim.v.shell_error ~= 0 or not result or result == '' then
         return nil, 'Could not fetch PR base/head SHAs'
       end
 
       result = vim.trim(result)
-      local base_sha, head_sha = result:match('^([^\t]+)\t(.+)$')
+      local base_sha, head_sha = result:match '^([^\t]+)\t(.+)$'
       if not base_sha or not head_sha then
         return nil, 'Unexpected gh pr view output'
       end
@@ -221,8 +430,12 @@ read -r
 ]],
         vim.fn.fnamemodify(ctx.path, ':t'),
         vim.fn.fnamemodify(ctx.path, ':t'),
-        ctx.repo, ctx.path, ctx.base_sha,
-        ctx.repo, ctx.path, ctx.head_sha
+        ctx.repo,
+        ctx.path,
+        ctx.base_sha,
+        ctx.repo,
+        ctx.path,
+        ctx.head_sha
       )
 
       vim.fn.termopen({ 'zsh', '-lc', term_cmd }, {
@@ -243,27 +456,27 @@ read -r
     end
 
     local extract_image_url = function(line)
-      local url = line:match('src%s*=%s*"(https?://[^"]+)"')
+      local url = line:match 'src%s*=%s*"(https?://[^"]+)"'
       if url then
         return url
       end
 
-      url = line:match("src%s*=%s*'(https?://[^']+)'")
+      url = line:match "src%s*=%s*'(https?://[^']+)'"
       if url then
         return url
       end
 
-      url = line:match('!%b[]%((https?://[^)%s]+)')
+      url = line:match '!%b[]%((https?://[^)%s]+)'
       if url then
         return url
       end
 
-      url = line:match('(https?://%S+)')
+      url = line:match '(https?://%S+)'
       if not url then
         return nil
       end
 
-      return (url:gsub("[)>\"']+$", ''))
+      return (url:gsub('[)>"\']+$', ''))
     end
 
     local open_image_url_under_cursor = function()
@@ -288,13 +501,13 @@ read -r
     end
 
     local open_pr_files_picker = function()
-      local reviews = require('octo.reviews')
+      local reviews = require 'octo.reviews'
       local layout = reviews.get_current_layout()
       if not layout then
         return
       end
 
-      local picker_preview = require('snacks.picker.preview')
+      local picker_preview = require 'snacks.picker.preview'
 
       local file_preview = function(ctx)
         local item = ctx.item
@@ -315,7 +528,7 @@ read -r
 
         item.preview = {
           text = text,
-          ft = vim.filetype.match({ filename = file.path }) or '',
+          ft = vim.filetype.match { filename = file.path } or '',
           loc = false,
         }
         return picker_preview.preview(ctx)
@@ -331,7 +544,7 @@ read -r
         }
       end
 
-      snacks.picker({
+      snacks.picker {
         title = 'PR Changed Files',
         items = items,
         preview = file_preview,
@@ -341,11 +554,11 @@ read -r
             layout:set_current_file(item._file_entry)
           end
         end,
-      })
+      }
     end
 
     local open_pr_grep_picker = function()
-      local reviews = require('octo.reviews')
+      local reviews = require 'octo.reviews'
       local layout = reviews.get_current_layout()
       if not layout then
         return
@@ -367,7 +580,7 @@ read -r
                 _file_entry = file,
                 preview = {
                   text = table.concat(file.right_lines or {}, '\n'),
-                  ft = vim.filetype.match({ filename = file.path }) or '',
+                  ft = vim.filetype.match { filename = file.path } or '',
                   loc = true,
                 },
               }
@@ -375,7 +588,7 @@ read -r
           end
         end
 
-        snacks.picker({
+        snacks.picker {
           title = 'PR Grep (head)',
           items = items,
           preview = 'preview',
@@ -386,7 +599,7 @@ read -r
             end
             layout:set_current_file(item._file_entry)
             vim.schedule(function()
-              local win = item._file_entry:get_win('right')
+              local win = item._file_entry:get_win 'right'
               if not win or not vim.api.nvim_win_is_valid(win) then
                 return
               end
@@ -395,7 +608,7 @@ read -r
               vim.api.nvim_win_set_cursor(win, { math.min(item.lnum, line_count), 0 })
             end)
           end,
-        })
+        }
       end
 
       local unfetched = {}
@@ -417,26 +630,30 @@ read -r
 
       local attempts = 0
       local timer = vim.uv.new_timer()
-      timer:start(200, 200, vim.schedule_wrap(function()
-        attempts = attempts + 1
-        local all_ready = true
-        for _, file in ipairs(files) do
-          if not file:is_ready_to_render() then
-            all_ready = false
-            break
+      timer:start(
+        200,
+        200,
+        vim.schedule_wrap(function()
+          attempts = attempts + 1
+          local all_ready = true
+          for _, file in ipairs(files) do
+            if not file:is_ready_to_render() then
+              all_ready = false
+              break
+            end
           end
-        end
 
-        if all_ready or attempts > 150 then
-          timer:stop()
-          timer:close()
-          if all_ready then
-            build_items()
-          else
-            vim.notify('Timed out fetching PR files', vim.log.levels.ERROR)
+          if all_ready or attempts > 150 then
+            timer:stop()
+            timer:close()
+            if all_ready then
+              build_items()
+            else
+              vim.notify('Timed out fetching PR files', vim.log.levels.ERROR)
+            end
           end
-        end
-      end))
+        end)
+      )
     end
 
     local panel_timers = {}
@@ -458,31 +675,35 @@ read -r
 
           local new_timer = vim.uv.new_timer()
           panel_timers[bufnr] = new_timer
-          new_timer:start(150, 0, vim.schedule_wrap(function()
-            local reviews = require('octo.reviews')
-            local layout = reviews.get_current_layout()
-            if not layout or not layout.file_panel or not layout.file_panel:is_open() then
-              return
-            end
-            if layout.file_panel.bufid ~= bufnr then
-              return
-            end
+          new_timer:start(
+            150,
+            0,
+            vim.schedule_wrap(function()
+              local reviews = require 'octo.reviews'
+              local layout = reviews.get_current_layout()
+              if not layout or not layout.file_panel or not layout.file_panel:is_open() then
+                return
+              end
+              if layout.file_panel.bufid ~= bufnr then
+                return
+              end
 
-            local file = layout.file_panel:get_file_at_cursor()
-            if not file then
-              return
-            end
+              local file = layout.file_panel:get_file_at_cursor()
+              if not file then
+                return
+              end
 
-            if layout.files[layout.selected_file_idx] == file then
-              return
-            end
+              if layout.files[layout.selected_file_idx] == file then
+                return
+              end
 
-            layout:set_current_file(file)
-            local panel_win = vim.fn.bufwinid(bufnr)
-            if panel_win ~= -1 and vim.api.nvim_win_is_valid(panel_win) then
-              vim.api.nvim_set_current_win(panel_win)
-            end
-          end))
+              layout:set_current_file(file)
+              local panel_win = vim.fn.bufwinid(bufnr)
+              if panel_win ~= -1 and vim.api.nvim_win_is_valid(panel_win) then
+                vim.api.nvim_set_current_win(panel_win)
+              end
+            end)
+          )
         end,
       })
 
@@ -504,12 +725,14 @@ read -r
       callback = function(args)
         vim.keymap.set('n', '<leader>r', '<Nop>', { buffer = args.buf })
         vim.keymap.set('x', '<leader>r', '<Nop>', { buffer = args.buf })
-        local ufo = require('ufo')
+        local ufo = require 'ufo'
         ufo.detach(args.buf)
         ufo.attach(args.buf)
 
         vim.schedule(function()
-          if not vim.api.nvim_buf_is_valid(args.buf) then return end
+          if not vim.api.nvim_buf_is_valid(args.buf) then
+            return
+          end
           vim.keymap.set('n', '<C-r>', function()
             local bufnr = vim.api.nvim_get_current_buf()
             local done = false
@@ -520,7 +743,9 @@ read -r
             local timeout_timer = vim.uv.new_timer()
 
             local function finish(success)
-              if done then return end
+              if done then
+                return
+              end
               done = true
               spinner_timer:stop()
               spinner_timer:close()
@@ -535,20 +760,30 @@ read -r
             end
 
             vim.notify('Refreshing PR…', vim.log.levels.INFO, { id = notif_id, timeout = false, icon = frames[1] })
-            spinner_timer:start(80, 80, vim.schedule_wrap(function()
-              frame = (frame + 1) % #frames
-              vim.notify('Refreshing PR…', vim.log.levels.INFO, { id = notif_id, timeout = false, icon = frames[frame + 1] })
-            end))
+            spinner_timer:start(
+              80,
+              80,
+              vim.schedule_wrap(function()
+                frame = (frame + 1) % #frames
+                vim.notify('Refreshing PR…', vim.log.levels.INFO, { id = notif_id, timeout = false, icon = frames[frame + 1] })
+              end)
+            )
 
             vim.api.nvim_create_autocmd('TextChanged', {
               buffer = bufnr,
               once = true,
-              callback = function() finish(true) end,
+              callback = function()
+                finish(true)
+              end,
             })
 
-            timeout_timer:start(30000, 0, vim.schedule_wrap(function()
-              finish(false)
-            end))
+            timeout_timer:start(
+              30000,
+              0,
+              vim.schedule_wrap(function()
+                finish(false)
+              end)
+            )
 
             require('octo.commands').reload()
           end, { buffer = args.buf, desc = 'Refresh PR with spinner' })
@@ -558,7 +793,7 @@ read -r
 
     vim.api.nvim_create_autocmd('BufEnter', {
       callback = function(args)
-        local reviews = require('octo.reviews')
+        local reviews = require 'octo.reviews'
         local layout = reviews.get_current_layout()
         if not layout or not layout.file_panel then
           return
@@ -600,8 +835,36 @@ read -r
       nav.open_in_browser()
     end, { desc = 'Octo open in browser' })
     vim.keymap.set('n', '<leader>oi', open_image_url_under_cursor, { desc = 'Octo open image URL' })
-    vim.keymap.set('n', '<leader>oy', '<cmd>Octo comment url<cr>', { desc = 'Octo copy comment URL to clipboard' })
-    vim.keymap.set('n', '<leader>oY', '<cmd>Octo pr url<cr>', { desc = 'Octo copy PR URL to clipboard' })
+    vim.keymap.set('n', '<leader>oy', function()
+      -- In a diff buffer, get_current_buffer() returns nil because diff buffers
+      -- are not registered in octo_buffers. Fall back to the current review's PR URL.
+      local buf = utils.get_current_buffer()
+      if buf then
+        vim.cmd 'Octo comment url'
+        return
+      end
+      local review = require('octo.reviews').get_current_review()
+      if review then
+        utils.copy_url(review.pull_request.url)
+        return
+      end
+      utils.copy_url(utils.get_remote_url())
+    end, { desc = 'Octo copy comment/PR URL to clipboard' })
+    vim.keymap.set('n', '<leader>oY', function()
+      -- In a diff buffer, get_current_buffer() returns nil because diff buffers
+      -- are not registered in octo_buffers. Fall back to the current review's PR URL.
+      local buf = utils.get_current_buffer()
+      if buf then
+        utils.copy_url(buf.node.url)
+        return
+      end
+      local review = require('octo.reviews').get_current_review()
+      if review then
+        utils.copy_url(review.pull_request.url)
+        return
+      end
+      utils.copy_url(utils.get_remote_url())
+    end, { desc = 'Octo copy PR URL to clipboard' })
     vim.keymap.set('n', '<leader>sf', function()
       if in_octo_review() then
         open_pr_files_picker()
@@ -614,7 +877,7 @@ read -r
         open_pr_grep_picker()
         return
       end
-      snacks.picker.grep({ args = { '--fixed-strings' } })
+      snacks.picker.grep { args = { '--fixed-strings' } }
     end, { desc = '[S]earch by [G]rep' })
   end,
 }
